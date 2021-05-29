@@ -1,0 +1,83 @@
+---
+title: "Os 10 melhores Fundos de Investimento dos Ultimos 2 anos"
+author: "Minha Arvore de Dinheiro"
+date: "27/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Quais os 10 melhores Fundos de Investimento desde 2020?
+
+
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE}
+
+# Create Portfolio optimization
+
+graphics.off()
+
+start.date<-"2020-07-06"
+week.start.date<-"2020-08-14"
+end.date<- '2020-12-31'
+Semana<-10
+nome_semana<-"Dez"
+  
+library(PerformanceAnalytics)
+library(RiskPortfolios)
+library(ggplot2)
+library(readr)
+library(reshape2)
+library(xts)
+library(tidyverse)
+library(plotly)
+
+
+
+#pega funções e dados necessários de outros scripts
+source("fcts/pega_dados_rets.R")
+source('D:/Blog/XP project/aux-get cdi.R', encoding = 'UTF-8')
+source("04-Get Factor Data.R")
+source('fcts/chart_functions.R')
+source('fcts/otimizador.R')
+source("fcts/Gera_cov.R")
+
+#pega dados a serem utilizados
+rets <- read_rds('data/rets.rds')
+carteira <- read_rds('carteiras/carteiras.rds')
+fundos<-read_rds("data/base_xp.rds")
+cdi<-read_rds('data/cdi.rds')
+de_para<-read_rds("data/de_para.rds")
+Retorno.carteira<-read_rds('data/ret.carteiras.rds')
+Ret.Fundos<-read_rds('data/ret_funds.rds')
+
+Risco<-list()
+
+for (tipo in c("Conservadora","Moderada","Arrojada")){
+  fundos<-carteira[[tipo]][['Otima']][['otimizador']]$weights
+  Risco[[tipo]]<-value_at_risk(returns = Ret.Fundos[[tipo]], pesos = fundos)
+}
+
+bvsp = BatchGetSymbols('^BVSP', first.date = as.Date(start.date)-3,
+ last.date = Sys.Date())$df.tickers %>% 
+  mutate(Retorno = price.adjusted/dplyr::lag(price.adjusted)-1) %>% 
+  select(ref.date, Retorno)
+
+bvsp<-xts(bvsp[,-1], order.by = bvsp[,1])
+names(bvsp)<-"Ibovespa"
+
+ret.bova11.inic<-Return.cumulative(bvsp[paste0(start.date,"/",end.date)])
+ret.bova11.week<-Return.cumulative(bvsp[paste0(week.start.date,"/",end.date)])
+
+sharpe.df<-do.call(cbind, Retorno.carteira)
+sharpe.df<-sharpe.df[paste0(start.date,"/",end.date)]
+sharpe.df<-merge(sharpe.df, bvsp)
+sharpe.df<-na.omit(sharpe.df)
+names(sharpe.df)<-c("Carteira.Conservadora", "Carteira.Moderada", "Carteira.Arrojada", "Ibovespa")
+
+#sharpe<-SharpeRatio(sharpe.df)
+
+
+```

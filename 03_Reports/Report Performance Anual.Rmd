@@ -1,0 +1,745 @@
+---
+title: "Desempenho da carteira"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE}
+
+# Create Portfolio optimization
+
+graphics.off()
+
+start.date<-"2020-07-06"
+week.start.date<-"2020-08-14"
+end.date<- '2020-12-31'
+Semana<-10
+nome_semana<-"Dez"
+  
+library(PerformanceAnalytics)
+library(RiskPortfolios)
+library(ggplot2)
+library(readr)
+library(reshape2)
+library(xts)
+library(tidyverse)
+library(plotly)
+
+
+
+#pega funções e dados necessários de outros scripts
+source("fcts/pega_dados_rets.R")
+source('D:/Blog/XP project/aux-get cdi.R', encoding = 'UTF-8')
+source("04-Get Factor Data.R")
+source('fcts/chart_functions.R')
+source('fcts/otimizador.R')
+source("fcts/Gera_cov.R")
+
+#pega dados a serem utilizados
+rets <- read_rds('data/rets.rds')
+carteira <- read_rds('carteiras/carteiras.rds')
+fundos<-read_rds("data/base_xp.rds")
+cdi<-read_rds('data/cdi.rds')
+de_para<-read_rds("data/de_para.rds")
+Retorno.carteira<-read_rds('data/ret.carteiras.rds')
+Ret.Fundos<-read_rds('data/ret_funds.rds')
+
+Risco<-list()
+
+for (tipo in c("Conservadora","Moderada","Arrojada")){
+  fundos<-carteira[[tipo]][['Otima']][['otimizador']]$weights
+  Risco[[tipo]]<-value_at_risk(returns = Ret.Fundos[[tipo]], pesos = fundos)
+}
+
+bvsp = BatchGetSymbols('^BVSP', first.date = as.Date(start.date)-3,
+ last.date = Sys.Date())$df.tickers %>% 
+  mutate(Retorno = price.adjusted/dplyr::lag(price.adjusted)-1) %>% 
+  select(ref.date, Retorno)
+
+bvsp<-xts(bvsp[,-1], order.by = bvsp[,1])
+names(bvsp)<-"Ibovespa"
+
+ret.bova11.inic<-Return.cumulative(bvsp[paste0(start.date,"/",end.date)])
+ret.bova11.week<-Return.cumulative(bvsp[paste0(week.start.date,"/",end.date)])
+
+sharpe.df<-do.call(cbind, Retorno.carteira)
+sharpe.df<-sharpe.df[paste0(start.date,"/",end.date)]
+sharpe.df<-merge(sharpe.df, bvsp)
+sharpe.df<-na.omit(sharpe.df)
+names(sharpe.df)<-c("Carteira.Conservadora", "Carteira.Moderada", "Carteira.Arrojada", "Ibovespa")
+
+#sharpe<-SharpeRatio(sharpe.df)
+
+
+```
+
+## Performance Das Carteiras Recomendadas: Análise de 2020`
+
+Olá pessoal! Hoje realizaremos a avaliação do desempenho das carteiras recomendadas de fundos de investimento no ano de 2020!
+
+Se você ainda não conhece o projeto das carteiras recomendadas, dá uma olhada nesse [**post aqui**](http://minhaarvorededinheiro.com/carteira-de-investimentos-como-escolher/) e se ficar com alguma dúvida é só mandar pra gente! [Na primeira postagem da série](http://minhaarvorededinheiro.com/performance-das-carteiras-recomendadas/) também cobrimos um pouco sobre gestão de risco e avaliação dos riscos das carteiras. Mesmo o projeto existindo há pouco menos de 6 meses, podemos tentar avaliar quais foram os erros e acertos nesse primeiro semestre.
+
+Para começarmos a avaliação, segue a tabela com os retornos no período:
+
+**Tabela: `r paste0("Performance no ano (", format(as.Date(start.date), "%d/%m/%y"), "-", format(as.Date(end.date), "%d/%m/%y"), ")")`**
+
+&nbsp;  
+
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE}
+
+retornos<-do.call(cbind,Retorno.carteira) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.)%>%
+  as.data.frame(.)
+
+risco<-do.call(cbind,Risco)%>%
+  t()%>%
+  cbind(.,t(retornos))%>%
+  as.data.frame(.)%>%
+  setNames( c("Risco", "Cumulative_Returns"))%>%
+  #rownames_to_column('tipo') %>%
+  mutate("Cumulative_Returns" = Cumulative_Returns) %>%
+  mutate("Retorno_total" = t(PerformanceAnalytics::Return.cumulative(do.call(cbind,Retorno.carteira)[paste0("/",end.date)])))%>%
+  mutate("tipo"= c("Conservadora","Moderada","Arrojada"))%>%
+  #column_to_rownames('tipo') %>%
+  mutate("Risco" = Risco/100) %>%
+  mutate("Retorno Anualizado" = t(PerformanceAnalytics::Return.annualized(do.call(cbind,Retorno.carteira)[paste0("/",end.date)]))) %>% 
+  mutate("Sharpe" = t(PerformanceAnalytics::SharpeRatio(do.call(cbind,Retorno.carteira)[paste0("/",end.date)],FUN = "StdDev", annualize = T))) %>% 
+  setNames( c("Risco", "Retorno Semana", "Retorno desde Inicio", "Carteira", "Retorno Anualizado", "Índice de Sharpe")) %>%
+  select(Carteira, Risco, `Retorno desde Inicio`, `Retorno Anualizado`, `Índice de Sharpe`)
+
+pesos<-lapply(carteira, function (x) x[['Otima']][['otimizador']]$weights) %>%
+  unlist(.)
+
+library(gt)
+
+#conver retorno desde o inicio into numeric format
+#risco$`Retorno desde Inicio`<-as.numeric(risco$`Retorno desde Inicio`)
+#risco$`Retorno Anualizado`<- as.numeric
+variaveis_ruins<-c("Retorno desde Inicio", "Retorno Anualizado", "Índice de Sharpe")
+#cria tabela
+risco %>% 
+  mutate(across(all_of(variaveis_ruins),as.numeric))%>% 
+  gt(rowname_col=rownames(.)) %>%
+  tab_header(title = md(paste0("Tabela Performance no Ano")))%>% #md("&#127829; Tabela Performance Segunda Semana &#127829;")) %>%
+  fmt_percent(
+    columns = vars(Risco, `Retorno desde Inicio`, `Retorno Anualizado`),
+    decimals = 2,
+    use_seps = T) %>%
+  fmt_number(
+    columns = vars(`Índice de Sharpe`),
+    decimals = 2,
+    use_seps = T
+  ) %>% 
+  tab_options(
+    heading.background.color = "#186A3B",
+    table.align = "center",
+    heading.align = "center",
+    column_labels.background.color = "#186A3B",
+  )
+
+
+
+```
+
+  
+&nbsp;  
+
+  
+
+Como podemos ver na tabela acima, as carteiras Moderada e Conservadora não obtiveram um retorno muito bom no período. Especialmente a carteira Moderada, foi muito afetada por alguns fundos que não obtiveram um resultado muito bom no período como vamos ver mais abaixo.
+
+## Análise do desempenho da carteira
+
+O segundo semestre de 2020 foi realmente bem diferente em termos de mercado financeiro. Para termos uma noção da montanha-russa que foi, seguem alguns gráficos de alguns ativos durante este segundo semestre:
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE,out.width='150%', out.height='150%',dev='svg'}
+
+titulos <- read_rds('D:/Blog/Tesouro Direto/data/TD.rds')
+
+titulos %>% 
+  filter(Asset %in% c('LFT 010325', 'NTN-F 010129', 'NTN-B 150850')) %>% 
+  filter(Metric== "PU Venda") %>% 
+  filter(Dia>= as.Date(start.date)) %>% 
+  na.omit() %>% 
+  group_by(Asset) %>% 
+  arrange(Dia, .by_group=T) %>% 
+  na.locf() %>% 
+  mutate(Return = Values/dplyr:: lag(Values)-1) %>%
+  group_by(Asset) %>% 
+  na.omit() %>% 
+  mutate('Cumulative Return' = cumprod(1+Return)*100) %>% 
+  ggplot(aes(x = Dia, y = `Cumulative Return`, color=Asset)) +
+  geom_line(size=1) +
+  geom_hline(yintercept = 100, color = "black", size = 0.8, alpha=0.6) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n=6))+
+  scale_x_date(date_breaks = "2 weeks")+
+  scale_color_manual(values =  c( "#FF5233", "#7cb5ec","#90ed7d"))+
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, vjust=0.5),
+        legend.position = "bottom") +
+  xlab("") +
+  ylab("Retorno Acumulado") +
+  labs(subtitle = paste0("desde: ", format(as.Date(start.date), "%d/%m/%Y")),
+       caption = "Fonte: Tesouro Direto")+
+  ggtitle("Performance Títulos do Tesouro Direto")  
+  
+#ggplotly(chart1)
+
+
+sharpe.df %>% 
+  as.data.frame() %>% 
+  rownames_to_column('Date') %>% 
+  select(Date, Ibovespa) %>% 
+  mutate(across(where(is.character), as.Date)) %>% 
+  mutate('Cumulative Return' = cumprod(1+Ibovespa)*100) %>% 
+  ggplot(aes(x = Date, y = `Cumulative Return`)) +
+  geom_line(size=1, alpha = 0.8, color = "darkslategrey") +
+  geom_hline(yintercept = 100, color = "black", size = 0.8) +
+  scale_y_continuous(breaks = scales::pretty_breaks(n=6))+
+  scale_x_date(date_breaks = "2 weeks")+
+  #scale_fill_manual(values =  c( "#434348", "#7cb5ec","#90ed7d", "darkslategrey2"))+
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle=45, vjust=0.5),
+        legend.position = "bottom") +
+  xlab("") +
+  ylab("Retorno Acumulado") +
+  labs(subtitle = paste0("desde: ", format(as.Date(start.date), "%d/%m/%Y")))+
+  ggtitle("Performance Ibovespa")  
+  
+#ggplotly(chart2)
+
+```
+
+&nbsp;  
+
+Como podemos observar nos gráficos, foi uma montanha-russa e tanto! E podemos observar que os ativos mais arriscados como a NTN-B com vencimento em 2050 e o Ibovespa performaram muito melhor do que os mais seguros como a LFT por exemplo, que aliás em setembro teve um mês de retorno negativo, algo que não era observado desde 2002! Tais fatores realmente contribuíram para a performance ruim das carteiras mais conservadoras neste semestre.
+
+## O risco-retorno de cada carteira
+
+Como fizemos já em outros posts analisando a performance, comparamos a performance da carteira com a do Ibovespa e do CDI na tabela abaixo, destaco o retorno anualizado, a volatiliadade e o Índice de Sharpe
+
+A fórmula do Índice de Sharpe é dada por:
+
+$$\frac{(R_{ann} - r_{f})}{\sigma_{ann}}$$
+
+**Tabela 2: Relação Risco-Retorno das Carteiras e do Ibovespa:**
+&nbsp;  
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE}
+df.td<-titulos %>% 
+  filter(Asset %in% c('LFT 010325', 'NTN-F 010129', 'NTN-B 150850')) %>% 
+  filter(Metric== "PU Venda") %>% 
+  filter(Dia>= as.Date(start.date)) %>% 
+  na.omit() %>% 
+  group_by(Asset) %>% 
+  arrange(Dia, .by_group=T) %>% 
+  na.locf() %>% 
+  mutate(Return = Values/dplyr:: lag(Values)-1) %>% 
+  pivot_wider(
+    id_cols = "Dia",
+    names_from = Asset,
+    values_from = Return
+  )
+
+  #faz ajustes ao xts com os titulos do Tesouro Direto
+  df.td<-xts(df.td[,-1],order.by = df.td$Dia)
+  df.td[is.na(df.td)]<-0
+  names(df.td)<- c("LFT 2025", "NTN-B 2050", "NTN-F 2029")
+  df.td<-df.td[paste0(start.date,"/",end.date)]
+  
+  sharpe.df %>% 
+  merge(cdi.xts[paste0(start.date,"/",end.date)],df.td) %>% 
+  table.AnnualizedReturns(Rf=cdi.xts[paste0(start.date,"/",end.date)]) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Portfolio") %>% 
+  set_names(c("Portfolio", "Retorno Anualizado", "Volatilidade Anualizada", "Sharpe")) %>% 
+  mutate(Portfolio = gsub("\\.", " ", Portfolio)) %>% 
+  gt() %>%
+  fmt_markdown(
+    columns = 1) %>% 
+    fmt_percent(
+    columns = c(2,3),
+    decimals = 2,
+    use_seps = T) %>%
+    fmt_number(
+      columns = 4,
+      decimals = 2,
+      use_seps = T) %>% 
+  tab_options(
+    heading.background.color = "#186A3B",
+    table.align = "center",
+    heading.align = "center",
+    column_labels.background.color = "#186A3B",
+  )
+```
+
+&nbsp;  
+
+Como podemos ver na tabela, o retorno ruim da LFT com vencimento em 2025 influenciou bastante nossa **Carteira Conservadora** que possui fundos que baseiam uma boa parte de seu portfólio nestes títulos. Apesar disso, esta carteira ainda conseguiu superar o CDI no ano por possuir algum risco em alguns fundos Macro em seu portfólio. A maior decepção na minha opinião ficou com a **Carteira Moderada**. Esta carteira é composta em grande parte por fundos Macro de Média a Alta volatilidade. Uma das variáveis que pode ter afetado o desempenho destes fundos é a das taxas de juros pré-fixadas que, como podemos ver pelo desempenho da NTN-F 2029, apresentaram retornos negativos neste último semestre. Este mês irei realizar uma avaliação dos fundos selecionados e possivelmente mês que vem teremos algumas alterações nas carteiras para realizarmos um rebalanceamento.
+
+Por fim, a nossa **Carteira Arrojada** apresentou um rendimento muito bom neste semestre. Apesar de não ter batido o Ibovespa (em tempos de mercado muito altista isso normalmente irá acontecer pois esta carteira conta com alguns fundos Macro com menos Volatilidade que o Ibovespa) o desempenho da carteira foi muito bom com uma volatilidade não muito elevada na casa dos 12.5% e um Índice de Sharpe de quase 2! Com o tempo eu diria que a tendência é o Índice de Sharpe desta carteira ultrapassar o Índice de Sharpe do Ibovespa, que está muito influenciado pela fortíssima alta iniciada a partir de Novembro como vimos no gráfico anteriormente.
+
+&nbsp;  
+Vamos agora acompanhar a performance de cada carteira com mais detalhes nos próximos parágrafos!
+&nbsp;  
+
+
+## Performance Carteira Conservadora
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE,out.width='150%', out.height='150%',dev='svg'}
+
+tipo<-"Conservadora"
+#run chart
+gg.charts.PerformanceSummary(Retorno.carteira[[tipo]][paste0("/", end.date)], main= paste0("Performance Carteira ", tipo))
+
+retorno.semana.print<-paste0(formatC(100 * risco$`Retorno Semana`[risco$Carteira=="Conservadora"] , format = "f", digits = 2), "%")
+
+retorno.inicio.print<-paste0(formatC(100 * risco$`Retorno desde Inicio`[risco$Carteira=="Conservadora"] , format = "f", digits = 2), "%")
+
+retorno.ann.print<-paste0(formatC(100 * ((1+risco$`Retorno desde Inicio`[risco$Carteira=="Conservadora"])^(252/(Semana*5))-1) , format = "f", digits = 2), "%")
+
+
+
+retornos<-do.call(cbind,Retorno.carteira) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.)%>%
+  as.data.frame(.)
+  
+
+
+#tabela.performance<-tibble(c("Conservadora","Moderada","Arrojada"))
+#cols<-c("Risco", "Cumulative Returns")
+risco<-do.call(cbind,Risco)%>%
+  t()%>%
+  cbind(.,t(retornos))%>%
+  as.data.frame(.)%>%
+  setNames( c("Risco", "Cumulative_Returns"))%>%
+  #rownames_to_column('tipo') %>%
+  mutate("Cumulative_Returns" = Cumulative_Returns) %>%
+  mutate("Retorno_total" = t(PerformanceAnalytics::Return.cumulative(do.call(cbind,Retorno.carteira)[paste0("/",end.date)])))%>%
+  mutate("tipo"= c("Conservadora","Moderada","Arrojada"))%>%
+  #column_to_rownames('tipo') %>%
+  mutate("Risco" = Risco/100) %>%
+  setNames( c("Risco", "Retorno Semana", "Retorno desde Inicio", "Carteira")) %>%
+  select(Carteira, Risco, `Retorno Semana`, `Retorno desde Inicio`)
+
+pesos<-lapply(carteira, function (x) x[['Otima']][['otimizador']]$weights) %>%
+  unlist(.)
+
+#Contribuição semana
+contrib<-Ret.Fundos %>%
+  do.call(cbind,.) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.) %>%
+  t(.) %>%
+  as.data.frame(.)%>%
+  rownames_to_column('Fundo')
+
+
+contrib$Contributions<-contrib$`Cumulative Return` * pesos
+contrib$tipo<-sub("\\..*", "", names(pesos))
+contrib$Ret_carteira<-risco$`Retorno desde Inicio`[match(contrib$tipo, risco$Carteira)] 
+contrib$Percent_Ret_Carteira<-contrib$Contributions/contrib$Ret_carteira *100
+
+#get the 2 biggest positive contributors by group
+contrib.filtered<- contrib %>%
+  group_by(tipo) %>%
+  arrange(desc(Percent_Ret_Carteira)) %>%
+  slice(1:2)
+
+contrib.filtered$Fundo<-gsub("1", "", contrib.filtered$Fundo)
+names(contrib.filtered)[2]<-"Cumulative_Return"
+#get the  biggest negative contributors by group
+contrib.filtered.neg<- contrib %>%
+  filter(Contributions !=0) %>%
+  group_by(tipo) %>%
+  arrange(Percent_Ret_Carteira) %>%
+  slice(1)
+
+names(contrib.filtered.neg)[2]<-"Cumulative_Return"
+####################################
+#contribuição desde o inicio
+contrib_inic<-Ret.Fundos %>%
+  do.call(cbind,.) %>%
+  .[paste0(start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.) %>%
+  t(.) %>%
+  as.data.frame(.)%>%
+  rownames_to_column('Fundo')
+
+
+contrib_inic$Contributions<-contrib_inic$`Cumulative Return` * pesos
+contrib_inic$tipo<-sub("\\..*", "", names(pesos))
+contrib_inic$Ret_carteira<-risco$`Retorno desde Inicio`[match(contrib_inic$tipo, risco$Carteira)] 
+contrib_inic$Percent_Ret_Carteira<-contrib_inic$Contributions/contrib_inic$Ret_carteira *100
+
+names(contrib_inic)[2]<-"Cumulative_Return"
+
+#get the 2 biggest positive contributors by group
+contrib.filtered.inic<- contrib_inic %>%
+  group_by(tipo) %>%
+  arrange(desc(Percent_Ret_Carteira)) %>%
+  slice(1:2)
+
+contrib.filtered.inic$Fundo<-gsub("1", "", contrib.filtered.inic$Fundo)  
+names(contrib.filtered.inic)[2]<-"Cumulative_Return"
+#get the  biggest negative contributors by group
+contrib.filtered.neg.inic<- contrib_inic %>%
+  filter(Contributions !=0) %>%
+  group_by(tipo) %>%
+  arrange(Percent_Ret_Carteira) %>%
+  slice(1)
+
+contrib.filtered.neg$Fundo<-gsub("1", "", contrib.filtered.neg$Fundo)
+contrib.filtered.neg.inic$Fundo<-gsub("1", "", contrib.filtered.neg.inic$Fundo)
+names(contrib.filtered.neg.inic)[2]<-"Cumulative_Return"
+
+
+```
+
+&nbsp;  
+
+Conforme vimos, a carteira Conservadora apresentou um retorno de `r paste0(retorno.inicio.print, " neste semestre")`.  Cerca de `r paste0(formatC(contrib.filtered.inic$Percent_Ret_Carteira[contrib.filtered.inic$tipo==tipo][1], format="f", digits=2), "%")` da performance se deve ao fundo **`r gsub("\\."," ",contrib.filtered.inic$Fundo[contrib.filtered.inic$tipo==tipo][1])`** que apresenta um retorno de `r paste0(formatC(100*contrib.filtered.inic$Cumulative_Return[contrib.filtered.inic$tipo==tipo][1], format="f", digits=2), "%")` neste semestre. Outros `r paste0(formatC(contrib.filtered.inic$Percent_Ret_Carteira[contrib.filtered.inic$tipo==tipo][2], format="f", digits=2), "%")` se devem ao **`r gsub("\\."," ",contrib.filtered.inic$Fundo[contrib.filtered.inic$tipo==tipo][2])`** que apresenta retornos de `r paste0(formatC(100*contrib.filtered.inic$Cumulative_Return[contrib.filtered.inic$tipo==tipo][2], format="f", digits=2), "%")` desde o início. `r ifelse(contrib.filtered.neg.inic$Cumulative_Return[contrib.filtered.neg.inic$tipo==tipo][1]>0,"**Nenhuma carteira gerou retornos negativos no ano, logo não houve destaques negativos!**",sprintf("O destaque negativo vai para o **%s** que perdeu %s no semestre.",gsub("\\."," ",contrib.filtered.neg.inic$Fundo[contrib.filtered.neg.inic$tipo==tipo]), paste0(formatC(-100*contrib.filtered.neg.inic$Cumulative_Return[contrib.filtered.neg.inic$tipo==tipo][1], format="f", digits=2), "%")))`
+
+
+&nbsp;  
+
+## Performance Carteira Moderada
+&nbsp;  
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE,out.width='150%', out.height='150%',dev='svg'}
+
+tipo<-"Moderada"
+#run chart
+gg.charts.PerformanceSummary(Retorno.carteira[[tipo]][paste0("/", end.date)], main= paste0("Performance Carteira ", tipo))
+
+retorno.semana.print<-paste0(formatC(100 * risco$`Retorno Semana`[risco$Carteira==tipo] , format = "f", digits = 2), "%")
+
+retorno.inicio.print<-paste0(formatC(100 * risco$`Retorno desde Inicio`[risco$Carteira==tipo] , format = "f", digits = 2), "%")
+
+retorno.ann.print<-paste0(formatC(100 * ((1+risco$`Retorno desde Inicio`[risco$Carteira=="Conservadora"])^(252/(Semana*5))-1) , format = "f", digits = 2), "%")
+
+
+
+retornos<-do.call(cbind,Retorno.carteira) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.)%>%
+  as.data.frame(.)
+  
+
+
+#tabela.performance<-tibble(c("Conservadora","Moderada","Arrojada"))
+#cols<-c("Risco", "Cumulative Returns")
+risco<-do.call(cbind,Risco)%>%
+  t()%>%
+  cbind(.,t(retornos))%>%
+  as.data.frame(.)%>%
+  setNames( c("Risco", "Cumulative_Returns"))%>%
+  #rownames_to_column('tipo') %>%
+  mutate("Cumulative_Returns" = Cumulative_Returns) %>%
+  mutate("Retorno_total" = t(PerformanceAnalytics::Return.cumulative(do.call(cbind,Retorno.carteira)[paste0("/",end.date)])))%>%
+  mutate("tipo"= c("Conservadora","Moderada","Arrojada"))%>%
+  #column_to_rownames('tipo') %>%
+  mutate("Risco" = Risco/100) %>%
+  setNames( c("Risco", "Retorno Semana", "Retorno desde Inicio", "Carteira")) %>%
+  select(Carteira, Risco, `Retorno Semana`, `Retorno desde Inicio`)
+
+pesos<-lapply(carteira, function (x) x[['Otima']][['otimizador']]$weights) %>%
+  unlist(.)
+
+#Contribuição semana
+contrib<-Ret.Fundos %>%
+  do.call(cbind,.) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.) %>%
+  t(.) %>%
+  as.data.frame(.)%>%
+  rownames_to_column('Fundo')
+
+
+contrib$Contributions<-contrib$`Cumulative Return` * pesos
+contrib$tipo<-sub("\\..*", "", names(pesos))
+contrib$Ret_carteira<-risco$`Retorno desde Inicio`[match(contrib$tipo, risco$Carteira)] 
+contrib$Percent_Ret_Carteira<-contrib$Contributions/contrib$Ret_carteira *100
+
+#get the 2 biggest positive contributors by group
+contrib.filtered<- contrib %>%
+  group_by(tipo) %>%
+  arrange(desc(Percent_Ret_Carteira)) %>%
+  slice(1:2)
+
+contrib.filtered$Fundo<-gsub("1", "", contrib.filtered$Fundo)
+names(contrib.filtered)[2]<-"Cumulative_Return"
+#get the  biggest negative contributors by group
+contrib.filtered.neg<- contrib %>%
+  filter(Contributions !=0) %>%
+  group_by(tipo) %>%
+  arrange(Percent_Ret_Carteira) %>%
+  slice(1)
+
+names(contrib.filtered.neg)[2]<-"Cumulative_Return"
+####################################
+#contribuição desde o inicio
+contrib_inic<-Ret.Fundos %>%
+  do.call(cbind,.) %>%
+  .[paste0(start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.) %>%
+  t(.) %>%
+  as.data.frame(.)%>%
+  rownames_to_column('Fundo')
+
+
+contrib_inic$Contributions<-contrib_inic$`Cumulative Return` * pesos
+contrib_inic$tipo<-sub("\\..*", "", names(pesos))
+contrib_inic$Ret_carteira<-risco$`Retorno desde Inicio`[match(contrib_inic$tipo, risco$Carteira)] 
+contrib_inic$Percent_Ret_Carteira<-contrib_inic$Contributions/contrib_inic$Ret_carteira *100
+
+names(contrib_inic)[2]<-"Cumulative_Return"
+
+#get the 2 biggest positive contributors by group
+contrib.filtered.inic<- contrib_inic %>%
+  group_by(tipo) %>%
+  arrange(desc(Percent_Ret_Carteira)) %>%
+  slice(1:2)
+
+contrib.filtered.inic$Fundo<-gsub("1", "", contrib.filtered.inic$Fundo)  
+names(contrib.filtered.inic)[2]<-"Cumulative_Return"
+#get the  biggest negative contributors by group
+contrib.filtered.neg.inic<- contrib_inic %>%
+  filter(Contributions !=0) %>%
+  group_by(tipo) %>%
+  arrange(Percent_Ret_Carteira) %>%
+  slice(1)
+
+contrib.filtered.neg$Fundo<-gsub("1", "", contrib.filtered.neg$Fundo)
+contrib.filtered.neg.inic$Fundo<-gsub("1", "", contrib.filtered.neg.inic$Fundo)
+names(contrib.filtered.neg.inic)[2]<-"Cumulative_Return"
+
+
+
+```
+
+&nbsp;  
+
+A carteira Moderada apresentou um retorno de `r paste0(retorno.inicio.print, " neste semestre.")`.  Cerca de `r paste0(formatC(contrib.filtered.inic$Percent_Ret_Carteira[contrib.filtered.inic$tipo==tipo][1], format="f", digits=2), "%")` da performance se deve ao fundo **`r gsub("\\."," ",contrib.filtered.inic$Fundo[contrib.filtered.inic$tipo==tipo][1])`** que apresenta um retorno de `r paste0(formatC(100*contrib.filtered.inic$Cumulative_Return[contrib.filtered.inic$tipo==tipo][1], format="f", digits=2), "%")` desde o início em 06 de julho de 2020. Outros `r paste0(formatC(contrib.filtered.inic$Percent_Ret_Carteira[contrib.filtered.inic$tipo==tipo][2], format="f", digits=2), "%")` se devem ao **`r gsub("\\."," ",contrib.filtered.inic$Fundo[contrib.filtered.inic$tipo==tipo][2])`** que apresenta retornos de `r paste0(formatC(100*contrib.filtered.inic$Cumulative_Return[contrib.filtered.inic$tipo==tipo][2], format="f", digits=2), "%")` desde o início. `r ifelse(contrib.filtered.neg.inic$Cumulative_Return[contrib.filtered.neg.inic$tipo==tipo][1]>0,"**Nenhuma carteira gerou retornos negativos no ano, logo não houve destaques negativos!**",sprintf("O destaque negativo vai para o **%s** que perdeu %s no semestre.",gsub("\\."," ",contrib.filtered.neg.inic$Fundo[contrib.filtered.neg.inic$tipo==tipo]), paste0(formatC(-100*contrib.filtered.neg.inic$Cumulative_Return[contrib.filtered.neg.inic$tipo==tipo][1], format="f", digits=2), "%")))`
+
+
+
+
+&nbsp;  
+
+
+## Performance Carteira Arrojada
+&nbsp;  
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE, out.width='150%', out.height='150%',dev='svg'}
+
+tipo<-"Arrojada"
+#run chart
+gg.charts.PerformanceSummary(Retorno.carteira[[tipo]][paste0("/", end.date)], main= paste0("Performance Carteira ", tipo))
+
+retorno.semana.print<-paste0(formatC(100 * risco$`Retorno Semana`[risco$Carteira==tipo] , format = "f", digits = 2), "%")
+
+retorno.inicio.print<-paste0(formatC(100 * risco$`Retorno desde Inicio`[risco$Carteira==tipo] , format = "f", digits = 2), "%")
+
+retorno.ann.print<-paste0(formatC(100 * ((1+risco$`Retorno desde Inicio`[risco$Carteira=="Conservadora"])^(252/(Semana*5))-1) , format = "f", digits = 2), "%")
+
+
+
+retornos<-do.call(cbind,Retorno.carteira) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.)%>%
+  as.data.frame(.)
+  
+
+
+#tabela.performance<-tibble(c("Conservadora","Moderada","Arrojada"))
+#cols<-c("Risco", "Cumulative Returns")
+risco<-do.call(cbind,Risco)%>%
+  t()%>%
+  cbind(.,t(retornos))%>%
+  as.data.frame(.)%>%
+  setNames( c("Risco", "Cumulative_Returns"))%>%
+  #rownames_to_column('tipo') %>%
+  mutate("Cumulative_Returns" = Cumulative_Returns) %>%
+  mutate("Retorno_total" = t(PerformanceAnalytics::Return.cumulative(do.call(cbind,Retorno.carteira)[paste0("/",end.date)])))%>%
+  mutate("tipo"= c("Conservadora","Moderada","Arrojada"))%>%
+  #column_to_rownames('tipo') %>%
+  mutate("Risco" = Risco/100) %>%
+  setNames( c("Risco", "Retorno Semana", "Retorno desde Inicio", "Carteira")) %>%
+  select(Carteira, Risco, `Retorno Semana`, `Retorno desde Inicio`)
+
+pesos<-lapply(carteira, function (x) x[['Otima']][['otimizador']]$weights) %>%
+  unlist(.)
+
+#Contribuição semana
+contrib<-Ret.Fundos %>%
+  do.call(cbind,.) %>%
+  .[paste0(week.start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.) %>%
+  t(.) %>%
+  as.data.frame(.)%>%
+  rownames_to_column('Fundo')
+
+
+contrib$Contributions<-contrib$`Cumulative Return` * pesos
+contrib$tipo<-sub("\\..*", "", names(pesos))
+contrib$Ret_carteira<-risco$`Retorno desde Inicio`[match(contrib$tipo, risco$Carteira)] 
+contrib$Percent_Ret_Carteira<-contrib$Contributions/contrib$Ret_carteira *100
+
+#get the 2 biggest positive contributors by group
+contrib.filtered<- contrib %>%
+  group_by(tipo) %>%
+  arrange(desc(Percent_Ret_Carteira)) %>%
+  slice(1:2)
+
+contrib.filtered$Fundo<-gsub("1", "", contrib.filtered$Fundo)
+names(contrib.filtered)[2]<-"Cumulative_Return"
+#get the  biggest negative contributors by group
+contrib.filtered.neg<- contrib %>%
+  filter(Contributions !=0) %>%
+  group_by(tipo) %>%
+  arrange(Percent_Ret_Carteira) %>%
+  slice(1)
+
+names(contrib.filtered.neg)[2]<-"Cumulative_Return"
+####################################
+#contribuição desde o inicio
+contrib_inic<-Ret.Fundos %>%
+  do.call(cbind,.) %>%
+  .[paste0(start.date,"/", end.date)] %>%
+  PerformanceAnalytics::Return.cumulative(.) %>%
+  t(.) %>%
+  as.data.frame(.)%>%
+  rownames_to_column('Fundo')
+
+
+contrib_inic$Contributions<-contrib_inic$`Cumulative Return` * pesos
+contrib_inic$tipo<-sub("\\..*", "", names(pesos))
+contrib_inic$Ret_carteira<-risco$`Retorno desde Inicio`[match(contrib_inic$tipo, risco$Carteira)] 
+contrib_inic$Percent_Ret_Carteira<-contrib_inic$Contributions/contrib_inic$Ret_carteira *100
+
+names(contrib_inic)[2]<-"Cumulative_Return"
+
+#get the 2 biggest positive contributors by group
+contrib.filtered.inic<- contrib_inic %>%
+  group_by(tipo) %>%
+  arrange(desc(Percent_Ret_Carteira)) %>%
+  slice(1:2)
+
+contrib.filtered.inic$Fundo<-gsub("1", "", contrib.filtered.inic$Fundo)  
+names(contrib.filtered.inic)[2]<-"Cumulative_Return"
+#get the  biggest negative contributors by group
+contrib.filtered.neg.inic<- contrib_inic %>%
+  filter(Contributions !=0) %>%
+  group_by(tipo) %>%
+  arrange(Percent_Ret_Carteira) %>%
+  slice(1)
+
+contrib.filtered.neg$Fundo<-gsub("1", "", contrib.filtered.neg$Fundo)
+contrib.filtered.neg.inic$Fundo<-gsub("1", "", contrib.filtered.neg.inic$Fundo)
+names(contrib.filtered.neg.inic)[2]<-"Cumulative_Return"
+
+
+
+```
+
+&nbsp;  
+
+Vamos agora para a carteira de melhor desempenho no período, a carteira Arrojada! Como vimos, ela apresentou um retorno de `r paste0(retorno.inicio.print, " neste semestre.")`.  Cerca de `r paste0(formatC(contrib.filtered.inic$Percent_Ret_Carteira[contrib.filtered.inic$tipo==tipo][1], format="f", digits=2), "%")` da performance se deve ao fundo **`r gsub("\\."," ",contrib.filtered.inic$Fundo[contrib.filtered.inic$tipo==tipo][1])`** que apresenta um retorno de `r paste0(formatC(100*contrib.filtered.inic$Cumulative_Return[contrib.filtered.inic$tipo==tipo][1], format="f", digits=2), "%")` desde o início em 06 de julho de 2020. Outros `r paste0(formatC(contrib.filtered.inic$Percent_Ret_Carteira[contrib.filtered.inic$tipo==tipo][2], format="f", digits=2), "%")` se devem ao **`r gsub("\\."," ",contrib.filtered.inic$Fundo[contrib.filtered.inic$tipo==tipo][2])`** que apresenta retornos de `r paste0(formatC(100*contrib.filtered.inic$Cumulative_Return[contrib.filtered.inic$tipo==tipo][2], format="f", digits=2), "%")` desde o início. Ou seja como podemos ver, os fundos de ações mais arriscados da carteira apresentaram um ótimo desempenho neste semestre, o que impulsionou os ganhos da mesma! Por outro lado `r ifelse(contrib.filtered.neg.inic$Cumulative_Return[contrib.filtered.neg.inic$tipo==tipo][1]>0,"**Nenhuma carteira gerou retornos negativos no ano, logo não houve destaques negativos!**",sprintf("o destaque negativo vai para o **%s** que perdeu %s no semestre.",gsub("\\."," ",contrib.filtered.neg.inic$Fundo[contrib.filtered.neg.inic$tipo==tipo]), paste0(formatC(-100*contrib.filtered.neg.inic$Cumulative_Return[contrib.filtered.neg.inic$tipo==tipo][1], format="f", digits=2), "%")))`
+
+&nbsp;  
+
+## Tabela Performance por fundo
+
+Além das análises das carteiras, achei interessante acrescentar as performances individuais de cada fundo, que vão ajudar na tomada de decisão no rebalanceamento das carteiras! Além do Retorno desde o início da carteira, adiciono também informações sobre a contribuição do fundo para o retorno da carteira no semestre ( Retorno fundo * peso do fundo), o Percentual do Retorno do fundo sobre o Retorno da carteira (Retorno Fundo/ Retorno Carteira), Volatilidade dos Retornos do Fundo para medir o risco de cada fundo e por fim o Índice de Sharpe para termos uma noção da relação risco-retorno de cada fundo presente nas carteiras:
+
+
+```{r , echo=FALSE, warning=FALSE, message=FALSE}
+
+#ajusta nomes da base
+rets<-Ret.Fundos %>% reduce(cbind)
+
+
+tabela_performance<-contrib_inic %>% 
+  mutate(Nome_clean = trimws(gsub("1","",gsub("\\."," ",Fundo)))) %>% 
+  mutate(Nome_clean = gsub("   ", " - ", Nome_clean)) %>% 
+  mutate(Sharpe = map(Fundo, ~SharpeRatio.annualized(rets[,.])),
+         Volatilidade = map(Fundo, ~StdDev.annualized(rets[,.])))
+
+  
+  tabela_performance %>% 
+    filter(Contributions !=0) %>% 
+    select(Nome_clean,tipo,Cumulative_Return, Contributions, Percent_Ret_Carteira, Volatilidade, Sharpe) %>% 
+    set_names(c("Fundo","Tipo Carteira" ,"Retorno desde o Início", "Contribuição para Carteira","Percentual Retorno Carteira","Volatilidade", "Sharpe")) %>%
+    mutate(Sharpe = as.numeric(Sharpe),
+           Volatilidade = as.numeric(Volatilidade),
+           `Percentual Retorno Carteira` = `Percentual Retorno Carteira`/100) %>% 
+    gt() %>%
+    fmt_markdown(
+      columns = 1:2) %>% 
+      fmt_percent(
+      columns = c(3:6),
+      decimals = 2,
+      use_seps = T) %>%
+      fmt_number(
+        columns = 7,
+        decimals = 2,
+        use_seps = T) %>% 
+    tab_options(
+      heading.background.color = "#186A3B",
+      table.align = "center",
+      heading.align = "center",
+      column_labels.background.color = "#186A3B",
+    )
+  
+  # tabela_performance %>%
+  #   filter(tipo=="Moderada") %>%
+  #   filter(Contributions<0) %>%
+  #   summarise(Contribuicao=sum(Contributions))
+  
+```
+
+
+&nbsp;  
+
+
+&nbsp;  
+
+
+Observando a Tabela, podemos entender o porque do desempenho ruim da carteira moderada. Nada menos do que 3 dos 5 fundos dela obtiveram retornos negativos no período contribuindo ao todo com -0.51% de retorno para a carteira (considerando os pesos de cada fundo).
+
+
+## Conclusão
+
+Agradeço a todos que acompanharam a evolução da carteira nestes 6 meses e espero que possamos obter muito mais retornos nos meses e anos que virão. Caso tenha ficado alguma dúvida na postagem, deixe seu comentário ou entre em contato com a gente pelo [fale Conosco!](https://minhaarvorededinheiro.com/contato/).
+
+&nbsp;  
+
+Caso tenha gostado da postagem, aproveite para consumir o restante do nosso conteúdo. Talvez você se interesse pelos seguintes posts:
+&nbsp;  
+
+* [Carteira de investimentos, como escolher?](http://minhaarvorededinheiro.com/carteira-de-investimentos-como-escolher/)
+* [Vale a pena pagar taxas mais elevadas dos fundos de investimento em ação?](https://minhaarvorededinheiro.com/vale-a-pena-pagar-as-taxas-mais-elevadas-dos-fundos-de-investimento-em-acao/)
+* [Motivos para diversificar seus investimentos](http://minhaarvorededinheiro.com/diversificacao/)
+* [Corretoras para você abrir sua conta grátis](http://minhaarvorededinheiro.com/abrir-conta-corretora-gratis/)
+&nbsp;  
+
+
+
+Bons investimentos!  
+Até mais!
+
+
+
+
+
