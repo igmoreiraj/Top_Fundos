@@ -102,3 +102,56 @@ base_rets<-df_prices %>%
   write_rds(lista_fundos, "00_Data/lista_final_top10_fundos.rds")
 
   
+  top10_fundos_2021 <- df_prices %>%
+    as_tibble() %>% 
+    mutate("Date" = index(df_prices)) %>% 
+    pivot_longer(
+      cols = -Date,
+      names_to = "Fundos",
+      values_to = "Prices"
+    ) %>% 
+    group_by(Fundos) %>% 
+    mutate(Retornos = Prices / dplyr::lag(Prices)-1) %>% 
+    filter(Fundos %in% nomes_fundos_filtrados$name) %>% 
+    left_join(Fatores, by="Date") %>% 
+    mutate("Retorno_sem_rf" = Retornos - CDI,
+           "Ibovespa_rf" = Ibovespa - CDI) %>% 
+    drop_na() %>% 
+    nest(-Fundos) %>% 
+    mutate("model_lm" = map(data, ~ lm(Retorno_sem_rf ~ Ibovespa_rf + I(Ibovespa_rf^2), data=.)),
+           "tidy_lm" = map(model_lm, ~broom::tidy(coeftest(.x, vcov. = NeweyWest(.x))))) %>% 
+    select(-model_lm) %>% 
+    unnest(tidy_lm) %>% 
+    filter(term=="(Intercept)"| term=="I(Ibovespa_rf^2)") %>% 
+    mutate(Timing = ifelse(term=="I(Ibovespa_rf^2)", 
+                           ifelse(p.value<0.05,estimate, 0), 
+                           statistic)) %>% 
+    pivot_wider(
+      id_cols = c(Fundos, data),
+      names_from = term,
+      values_from = Timing
+    ) %>% 
+    setNames(c("Fundos", "data", "statistic", "Timing")) %>% 
+    select(Fundos, data, statistic, Timing) %>% 
+    mutate("Retorno_Ann" = map_dbl(data, .f= ~ .x %>% 
+                                     filter(Date > as.Date("2021-01-01")) %>% 
+                                     summarise(prod(1 + Retornos)^(252/n())-1) %>% 
+                                     as.numeric()),
+           "Vol" = map_dbl(data, .f= ~ .x %>% 
+                             filter(Date > as.Date("2021-01-01")) %>%
+                             summarise(sd(Retornos, na.rm = T)*sqrt(252)) %>% 
+                             as.numeric()),
+           "Dias" = map_dbl(data, .f = ~nrow(.x)),
+           "Sharpe" = Retorno_Ann/Vol)
+  
+  lista_fundos_21 <- top10_fundos_2021 %>%
+    select(-data) %>% 
+    ungroup() %>% 
+    mutate(across(where(is.numeric), ~scale(.x, center = T, scale = T))) %>% 
+    mutate(nota = statistic + Timing + Retorno_Ann + Sharpe -  Vol) %>% 
+    arrange(nota) %>% 
+    slice_max(n=10, order_by = nota)  
+  
+  
+  
+  
